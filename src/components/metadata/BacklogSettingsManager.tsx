@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { BacklogConfig } from '../../types';
-import { Layers, Milestone, Plus, Trash2, Check, Sparkles } from 'lucide-react';
+import { BacklogConfig, BacklogPriorityConfig } from '../../types';
+import { DEFAULT_BACKLOG_PRIORITIES } from '../../db/seed';
+import { Layers, Milestone, Plus, Trash2, Check, Sparkles, Flag, RotateCcw } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 interface BacklogSettingsManagerProps {
@@ -9,12 +10,15 @@ interface BacklogSettingsManagerProps {
 }
 
 export const BacklogSettingsManager: React.FC<BacklogSettingsManagerProps> = ({
-  config = { epics: [], sprints: [], defaultSprint: '' },
+  config = { epics: [], sprints: [], defaultSprint: '', priorities: DEFAULT_BACKLOG_PRIORITIES },
   onChange,
 }) => {
   const [epics, setEpics] = useState<string[]>(config.epics || []);
   const [sprints, setSprints] = useState<string[]>(config.sprints || []);
   const [defaultSprint, setDefaultSprint] = useState<string>(config.defaultSprint || '');
+  const [priorities, setPriorities] = useState<BacklogPriorityConfig[]>(
+    config.priorities && config.priorities.length > 0 ? config.priorities : DEFAULT_BACKLOG_PRIORITIES
+  );
 
   const [newEpic, setNewEpic] = useState('');
   const [newSprint, setNewSprint] = useState('');
@@ -30,13 +34,13 @@ export const BacklogSettingsManager: React.FC<BacklogSettingsManagerProps> = ({
     const updated = [...epics, clean];
     setEpics(updated);
     setNewEpic('');
-    notifyChange(updated, sprints, defaultSprint);
+    notifyChange(updated, sprints, defaultSprint, priorities);
   };
 
   const handleRemoveEpic = (index: number) => {
     const updated = epics.filter((_, i) => i !== index);
     setEpics(updated);
-    notifyChange(updated, sprints, defaultSprint);
+    notifyChange(updated, sprints, defaultSprint, priorities);
   };
 
   const handleAddSprint = (e: React.FormEvent) => {
@@ -51,7 +55,7 @@ export const BacklogSettingsManager: React.FC<BacklogSettingsManagerProps> = ({
     setNewSprint('');
     const newDefault = defaultSprint || clean;
     setDefaultSprint(newDefault);
-    notifyChange(epics, updated, newDefault);
+    notifyChange(epics, updated, newDefault, priorities);
   };
 
   const handleRemoveSprint = (index: number) => {
@@ -60,19 +64,36 @@ export const BacklogSettingsManager: React.FC<BacklogSettingsManagerProps> = ({
     setSprints(updated);
     const newDefault = defaultSprint === removedName ? (updated[0] || '') : defaultSprint;
     setDefaultSprint(newDefault);
-    notifyChange(epics, updated, newDefault);
+    notifyChange(epics, updated, newDefault, priorities);
   };
 
   const handleDefaultSprintChange = (val: string) => {
     setDefaultSprint(val);
-    notifyChange(epics, sprints, val);
+    notifyChange(epics, sprints, val, priorities);
   };
 
-  const notifyChange = (newEpics: string[], newSprints: string[], newDefSprint: string) => {
+  const handlePriorityChange = (id: string, updates: Partial<BacklogPriorityConfig>) => {
+    const updated = priorities.map((p) => (p.id === id ? { ...p, ...updates } : p));
+    setPriorities(updated);
+    notifyChange(epics, sprints, defaultSprint, updated);
+  };
+
+  const handleResetPriorities = () => {
+    setPriorities(DEFAULT_BACKLOG_PRIORITIES);
+    notifyChange(epics, sprints, defaultSprint, DEFAULT_BACKLOG_PRIORITIES);
+  };
+
+  const notifyChange = (
+    newEpics: string[],
+    newSprints: string[],
+    newDefSprint: string,
+    newPriorities: BacklogPriorityConfig[]
+  ) => {
     onChange({
       epics: newEpics,
       sprints: newSprints,
       defaultSprint: newDefSprint,
+      priorities: newPriorities,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -230,6 +251,101 @@ export const BacklogSettingsManager: React.FC<BacklogSettingsManagerProps> = ({
             ))}
           </div>
         )}
+      </div>
+
+      {/* Backlog Priority Colors & Customization Card */}
+      <div className="bg-white dark:bg-[#050c21] p-5 rounded-xl border border-slate-200 dark:border-[#142552] shadow-sm dark:shadow-xl transition-colors">
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <Flag className="w-4 h-4 text-[#ff2d5f]" />
+            <h3 className="text-sm font-black text-slate-800 dark:text-white uppercase tracking-wider">
+              Priority Pill Configuration (P0, P1, P2, P3)
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={handleResetPriorities}
+            className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-slate-800 dark:hover:text-white cursor-pointer transition-colors"
+            title="Reset priority colors to standard defaults"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset Defaults</span>
+          </button>
+        </div>
+        <p className="text-xs text-slate-600 dark:text-slate-400 mb-4 font-medium">
+          Customize the minimal priority tags and their badge colors used across the backlog tables and modals.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {priorities.map((p) => (
+            <div
+              key={p.id}
+              className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#020612] border border-slate-200 dark:border-[#142552] space-y-2.5"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-slate-900 dark:text-white font-mono">
+                  {p.code}
+                </span>
+                {/* Live Preview Badge */}
+                <span
+                  className="px-2 py-0.5 rounded text-[11px] font-black border transition-all"
+                  style={{
+                    backgroundColor: p.bgColor,
+                    color: p.color,
+                    borderColor: `${p.color}40`,
+                  }}
+                >
+                  {p.label || p.code}
+                </span>
+              </div>
+
+              <div className="space-y-1.5 pt-1 text-[11px]">
+                <div>
+                  <label className="text-slate-500 font-semibold block mb-0.5">Label</label>
+                  <input
+                    type="text"
+                    value={p.label}
+                    maxLength={6}
+                    onChange={(e) => handlePriorityChange(p.id, { label: e.target.value })}
+                    className="w-full px-2 py-1 text-xs font-bold bg-white dark:bg-[#050c21] border border-slate-300 dark:border-[#142552] rounded-lg text-slate-800 dark:text-slate-200"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <label className="text-slate-500 font-semibold block mb-0.5">Text Color</label>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="color"
+                        value={p.color}
+                        onChange={(e) => handlePriorityChange(p.id, { color: e.target.value })}
+                        className="w-6 h-6 rounded border border-slate-300 dark:border-[#142552] cursor-pointer p-0 bg-transparent"
+                      />
+                      <span className="font-mono text-[10px] text-slate-600 dark:text-slate-400 uppercase">
+                        {p.color}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex-1">
+                    <label className="text-slate-500 font-semibold block mb-0.5">Badge BG</label>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="color"
+                        value={p.bgColor.length === 7 ? p.bgColor : '#ffffff'}
+                        onChange={(e) => handlePriorityChange(p.id, { bgColor: e.target.value })}
+                        className="w-6 h-6 rounded border border-slate-300 dark:border-[#142552] cursor-pointer p-0 bg-transparent"
+                      />
+                      <span className="font-mono text-[10px] text-slate-600 dark:text-slate-400 uppercase">
+                        {p.bgColor}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

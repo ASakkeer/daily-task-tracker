@@ -128,9 +128,9 @@ export interface ReportSnapshot {
   previousSlotSnapshotId?: string;
 }
 
-export type ActiveView = 'dashboard' | 'report_builder' | 'calendar' | 'metadata' | 'audit_log' | 'backlog';
+export type ActiveView = 'dashboard' | 'report_builder' | 'calendar' | 'metadata' | 'backlog' | 'backup_restore' | 'audit_log';
 
-export type BacklogPriority = 'P0_CRITICAL' | 'P1_HIGH' | 'P2_MEDIUM' | 'P3_LOW';
+export type BacklogPriority = 'P0_CRITICAL' | 'P1_HIGH' | 'P2_MEDIUM' | 'P3_LOW' | 'P0' | 'P1' | 'P2' | 'P3' | string;
 
 export type BacklogType = 'feature' | 'bug' | 'tech_debt' | 'spike' | 'improvement';
 
@@ -142,6 +142,15 @@ export type BacklogStatus =
   | 'blocked'
   | 'parked'
   | 'completed';
+
+export interface BacklogPriorityConfig {
+  id: string; // 'P0', 'P1', 'P2', 'P3'
+  label: string; // 'P0', 'P1', etc.
+  code: string; // 'P0', 'P1', 'P2', 'P3'
+  color: string; // text/dot hex color e.g. '#ff2d5f'
+  bgColor: string; // badge background hex e.g. '#ffe4e6'
+  order: number;
+}
 
 export interface BacklogItem {
   id: string;
@@ -155,6 +164,8 @@ export interface BacklogItem {
   customOwnerText?: string;
   moduleEpic?: string;
   targetSprint?: string;
+  targetDate?: string;
+  completedDate?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -164,6 +175,7 @@ export interface BacklogConfig {
   epics: string[];
   sprints: string[];
   defaultSprint?: string;
+  priorities?: BacklogPriorityConfig[];
 }
 
 export type AuditActionType =

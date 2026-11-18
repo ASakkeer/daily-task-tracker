@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Sparkles, AlertCircle, Layers, Tag, Flag, CheckCircle2, User, Milestone, Bookmark } from 'lucide-react';
+import { X, Sparkles, AlertCircle, Layers, Tag, Flag, CheckCircle2, User, Milestone, Bookmark, Calendar, CalendarDays } from 'lucide-react';
 import { AppMetadata, BacklogItem, BacklogPriority, BacklogStatus, BacklogType } from '../../types';
-import { BACKLOG_PRIORITIES, BACKLOG_STATUSES, BACKLOG_TYPES } from '../backlog/backlogConstants';
+import { BACKLOG_STATUSES, BACKLOG_TYPES, getPriorityBadge } from '../backlog/backlogConstants';
+import { getTodayDateStr } from '../../utils/date';
 import { cn } from '../../utils/cn';
 
 interface BacklogItemModalProps {
@@ -22,8 +23,10 @@ export const BacklogItemModal: React.FC<BacklogItemModalProps> = ({
 }) => {
   const [title, setTitle] = useState('');
   const [type, setType] = useState<BacklogType>('feature');
-  const [priority, setPriority] = useState<BacklogPriority>('P2_MEDIUM');
+  const [priority, setPriority] = useState<BacklogPriority>('P2');
   const [status, setStatus] = useState<BacklogStatus>('backlog');
+  const [targetDate, setTargetDate] = useState<string>('');
+  const [completedDate, setCompletedDate] = useState<string>('');
   const [storyPoints, setStoryPoints] = useState<string>('');
   const [selectedOwnerIds, setSelectedOwnerIds] = useState<string[]>([]);
   const [customOwnerText, setCustomOwnerText] = useState('');
@@ -36,8 +39,10 @@ export const BacklogItemModal: React.FC<BacklogItemModalProps> = ({
     if (initialItem) {
       setTitle(initialItem.title || '');
       setType(initialItem.type || 'feature');
-      setPriority(initialItem.priority || 'P2_MEDIUM');
+      setPriority(initialItem.priority || 'P2');
       setStatus(initialItem.status || 'backlog');
+      setTargetDate(initialItem.targetDate || '');
+      setCompletedDate(initialItem.completedDate || '');
       setStoryPoints(initialItem.storyPoints !== undefined ? String(initialItem.storyPoints) : '');
       setSelectedOwnerIds(initialItem.ownerIds || []);
       setCustomOwnerText(initialItem.customOwnerText || '');
@@ -47,8 +52,10 @@ export const BacklogItemModal: React.FC<BacklogItemModalProps> = ({
     } else {
       setTitle('');
       setType('feature');
-      setPriority('P2_MEDIUM');
+      setPriority('P2');
       setStatus('backlog');
+      setTargetDate(getTodayDateStr());
+      setCompletedDate('');
       setStoryPoints('');
       setSelectedOwnerIds([]);
       setCustomOwnerText('');
@@ -58,6 +65,16 @@ export const BacklogItemModal: React.FC<BacklogItemModalProps> = ({
     }
     setError(null);
   }, [initialItem, isOpen, metadata]);
+
+  // Handle status toggle to completed
+  const handleStatusChange = (newStatus: BacklogStatus) => {
+    setStatus(newStatus);
+    if (newStatus === 'completed' && !completedDate) {
+      setCompletedDate(getTodayDateStr());
+    } else if (newStatus !== 'completed' && completedDate) {
+      setCompletedDate('');
+    }
+  };
 
   // Handle ESC key
   useEffect(() => {
@@ -100,6 +117,8 @@ export const BacklogItemModal: React.FC<BacklogItemModalProps> = ({
       type,
       priority,
       status,
+      targetDate: targetDate.trim() || undefined,
+      completedDate: completedDate.trim() || undefined,
       storyPoints: parsedPoints,
       ownerIds: selectedOwnerIds,
       customOwnerText: customOwnerText.trim() || undefined,
@@ -199,19 +218,80 @@ export const BacklogItemModal: React.FC<BacklogItemModalProps> = ({
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
                 <Flag className="w-3.5 h-3.5 text-[#ff2d5f]" />
-                Priority Level
+                Priority (P0 - P3)
               </label>
-              <select
-                value={priority}
-                onChange={(e) => setPriority(e.target.value as BacklogPriority)}
+              <div className="grid grid-cols-4 gap-2">
+                {['P0', 'P1', 'P2', 'P3'].map((pCode) => {
+                  const b = getPriorityBadge(pCode, metadata.backlogConfig?.priorities);
+                  const isSelected = (priority || '').toUpperCase().includes(pCode);
+                  return (
+                    <button
+                      key={pCode}
+                      type="button"
+                      onClick={() => setPriority(pCode)}
+                      style={{
+                        backgroundColor: isSelected ? b.bgColor : undefined,
+                        color: isSelected ? b.color : undefined,
+                        borderColor: isSelected ? b.color : undefined,
+                      }}
+                      className={cn(
+                        'py-1.5 px-2 text-xs font-black rounded-xl border text-center transition-all cursor-pointer',
+                        isSelected
+                          ? 'ring-2 ring-[#ff2d5f]/25 shadow-xs font-black scale-102'
+                          : 'bg-slate-50 dark:bg-[#020612] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-[#142552] hover:border-slate-300 dark:hover:border-slate-700'
+                      )}
+                    >
+                      {b.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Target Date & Completed Date Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-[#ff2d5f]" />
+                  Target Date (Due Date)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setTargetDate(getTodayDateStr())}
+                  className="text-[10px] font-bold text-[#ff2d5f] hover:underline cursor-pointer"
+                >
+                  Set Today
+                </button>
+              </div>
+              <input
+                type="date"
+                value={targetDate}
+                onChange={(e) => setTargetDate(e.target.value)}
                 className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-[#020612] border border-slate-300 dark:border-[#142552] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#ff2d5f] font-semibold text-slate-900 dark:text-white"
-              >
-                {Object.values(BACKLOG_PRIORITIES).map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                  <CalendarDays className="w-3.5 h-3.5 text-emerald-500" />
+                  Completed Date
+                </label>
+                {status === 'completed' && (
+                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                    Auto-recorded
+                  </span>
+                )}
+              </div>
+              <input
+                type="date"
+                value={completedDate}
+                onChange={(e) => setCompletedDate(e.target.value)}
+                placeholder="YYYY-MM-DD"
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-[#020612] border border-slate-300 dark:border-[#142552] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#ff2d5f] font-semibold text-slate-900 dark:text-white"
+              />
             </div>
           </div>
 
@@ -224,7 +304,7 @@ export const BacklogItemModal: React.FC<BacklogItemModalProps> = ({
               </label>
               <select
                 value={status}
-                onChange={(e) => setStatus(e.target.value as BacklogStatus)}
+                onChange={(e) => handleStatusChange(e.target.value as BacklogStatus)}
                 className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-[#020612] border border-slate-300 dark:border-[#142552] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#ff2d5f] font-semibold text-slate-900 dark:text-white"
               >
                 {Object.values(BACKLOG_STATUSES).map((s) => (

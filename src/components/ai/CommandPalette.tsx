@@ -12,6 +12,7 @@ import {
   Calendar as CalendarIcon,
   History,
   BookmarkCheck,
+  Database,
 } from 'lucide-react';
 import { ReportSnapshot, TaskRow, ReportSlot, ActiveView, AppMetadata } from '../../types';
 
@@ -171,6 +172,16 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       icon: BookmarkCheck,
       run: () => {
         onNavigateView('backlog');
+        onClose();
+      },
+    },
+    {
+      id: 'view_backup_restore',
+      label: 'Go to Backup & Restore Center',
+      category: 'Views',
+      icon: Database,
+      run: () => {
+        onNavigateView('backup_restore');
         onClose();
       },
     },

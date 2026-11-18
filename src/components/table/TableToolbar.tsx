@@ -159,7 +159,7 @@ export const TableToolbar: React.FC<TableToolbarProps> = ({
         <button
           type="button"
           onClick={onResetClick || onResetAll || onResetFilters}
-          title="Reset table view density and clear all active filters"
+          title="Reset and clear all tasks in currently active table snapshot"
           className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-slate-300 bg-slate-100 hover:bg-rose-50 dark:bg-[#020612] dark:hover:bg-[#ff2d5f]/15 hover:text-[#ff2d5f] dark:hover:text-[#ff2d5f] rounded-lg border border-slate-200 dark:border-[#142552] hover:border-rose-300 dark:hover:border-[#ff2d5f]/40 transition-colors cursor-pointer group"
         >
           <RotateCcw className="w-3.5 h-3.5 text-slate-500 group-hover:text-[#ff2d5f] transition-transform group-hover:-rotate-45" />

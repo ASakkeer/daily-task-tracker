@@ -12,6 +12,7 @@ import {
   Moon,
   History,
   BookmarkCheck,
+  Database,
 } from 'lucide-react';
 import { ActiveView, AppMetadata } from '../../types';
 import { ThemeMode } from '../../hooks/useTheme';
@@ -45,6 +46,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         return { title: 'Studio Customization', icon: Sliders };
       case 'backlog':
         return { title: 'Work Item Backlog', icon: BookmarkCheck };
+      case 'backup_restore':
+        return { title: 'Backup & Restore Center', icon: Database };
       case 'audit_log':
         return { title: 'System Audit & Activity Log', icon: History };
       default:
