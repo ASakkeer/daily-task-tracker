@@ -11,6 +11,7 @@ import {
   ChevronDown,
   Upload,
   FileJson,
+  Sparkles,
 } from 'lucide-react';
 import {
   AppMetadata,
@@ -44,7 +45,11 @@ interface ReportBuilderViewProps {
   onMetadataUpdated: () => void;
   initialDate?: string;
   initialSlot?: ReportSlot;
+  onContextChange?: (date: string, slot: ReportSlot) => void;
 }
+
+const LAST_SLOT_STORAGE_KEY = 'daily_task_tracker_last_slot';
+const LAST_DATE_STORAGE_KEY = 'daily_task_tracker_last_date';
 
 const SLOTS: ReportSlot[] = ['MORNING', 'EVENING'];
 
@@ -52,10 +57,23 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
   metadata,
   onMetadataUpdated,
   initialDate,
-  initialSlot = 'MORNING',
+  initialSlot,
+  onContextChange,
 }) => {
-  const [activeDate, setActiveDate] = useState<string>(initialDate || getTodayDateStr());
-  const [activeSlot, setActiveSlot] = useState<ReportSlot>(initialSlot);
+  const [activeDate, setActiveDate] = useState<string>(() => {
+    if (initialDate) return initialDate;
+    const saved = localStorage.getItem(LAST_DATE_STORAGE_KEY);
+    return saved || getTodayDateStr();
+  });
+
+  const [activeSlot, setActiveSlot] = useState<ReportSlot>(() => {
+    if (initialSlot) return initialSlot;
+    const saved = localStorage.getItem(LAST_SLOT_STORAGE_KEY);
+    if (saved === 'MORNING' || saved === 'EVENING' || saved === 'AFTERNOON') {
+      return saved as ReportSlot;
+    }
+    return 'MORNING';
+  });
   const [highlightEodChanges, setHighlightEodChanges] = useState<boolean>(true);
 
   // In-table search, filter and density state
@@ -139,6 +157,21 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentSnapshot, activeDate, activeSlot]);
 
+  // Synchronize when initial props change externally (e.g. navigated from Calendar or Command Palette)
+  useEffect(() => {
+    if (initialSlot && initialSlot !== activeSlot) {
+      setActiveSlot(initialSlot);
+      localStorage.setItem(LAST_SLOT_STORAGE_KEY, initialSlot);
+    }
+  }, [initialSlot, activeSlot]);
+
+  useEffect(() => {
+    if (initialDate && initialDate !== activeDate) {
+      setActiveDate(initialDate);
+      localStorage.setItem(LAST_DATE_STORAGE_KEY, initialDate);
+    }
+  }, [initialDate, activeDate]);
+
   // Load active report snapshot from Dexie
   const loadActiveReport = async () => {
     const reportId = `${activeDate}_${activeSlot}`;
@@ -152,9 +185,15 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
     }
     setPreviousSlotSnapshot(prevSlot);
 
-    // Fetch all reports for rollover selection
-    const all = await db.reports.orderBy('date').reverse().toArray();
-    setAllRecentReports(all);
+    // Fetch all reports for rollover selection, sorted latest date & slot first
+    const all = await db.reports.toArray();
+    const sorted = all.sort((a, b) => {
+      const dateCmp = b.date.localeCompare(a.date);
+      if (dateCmp !== 0) return dateCmp;
+      const slotRank: Record<string, number> = { EVENING: 3, AFTERNOON: 2, MORNING: 1 };
+      return (slotRank[b.slot] || 0) - (slotRank[a.slot] || 0);
+    });
+    setAllRecentReports(sorted);
 
     if (found) {
       setCurrentSnapshot(found);
@@ -552,8 +591,13 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
             } else {
               const allSnapshots = await db.reports.toArray();
               if (allSnapshots.length > 0) {
-                setActiveDate(allSnapshots[0].date);
-                setActiveSlot(allSnapshots[0].slot);
+                const targetDate = allSnapshots[0].date;
+                const targetSlot = allSnapshots[0].slot;
+                setActiveDate(targetDate);
+                setActiveSlot(targetSlot);
+                localStorage.setItem(LAST_DATE_STORAGE_KEY, targetDate);
+                localStorage.setItem(LAST_SLOT_STORAGE_KEY, targetSlot);
+                onContextChange?.(targetDate, targetSlot);
               }
             }
           } else {
@@ -627,6 +671,8 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
 
       await db.reports.put(newReport);
       setActiveSlot(nextSlot);
+      localStorage.setItem(LAST_SLOT_STORAGE_KEY, nextSlot);
+      onContextChange?.(activeDate, nextSlot);
       showToast(`Successfully cloned report into ${nextSlot} snapshot!`);
     };
 
@@ -766,25 +812,47 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
 
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
 
-  const handleConfirmResetActiveTable = () => {
+  const handleConfirmResetActiveTable = async () => {
     setIsResetConfirmOpen(false);
+
+    const reportId = `${activeDate}_${activeSlot}`;
+    const taskCount = currentSnapshot?.tasks?.length || 0;
+    const updated: ReportSnapshot = currentSnapshot
+      ? {
+          ...currentSnapshot,
+          tasks: [],
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          id: reportId,
+          date: activeDate,
+          slot: activeSlot,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          tasks: [],
+        };
+
+    setCurrentSnapshot(updated);
+    await db.reports.put(updated);
+
     handleResetFilters();
     setDensity('compact');
     setSelectedTaskIds([]);
 
     logActivity({
-      actionType: 'system',
-      actionLabel: 'Table View Reset',
+      actionType: 'batch_delete',
+      actionLabel: 'Active Tasks Reset',
       entityType: 'report',
-      entityId: `${activeDate}_${activeSlot}`,
+      entityId: reportId,
       entityTitle: `${activeSlot} Task Table (${activeDate})`,
       actor: currentActor,
       actorRole: currentActorRole,
-      details: `Reset all active filters and restored default 1x compact density for current ${activeSlot} task table (${activeDate})`,
-      severity: 'warning',
+      details: `Reset and wiped ${taskCount} task(s) from ${activeSlot} task table (${activeDate})`,
+      severity: 'danger',
     });
 
-    showToast(`Reset filters & density for ${activeSlot} table!`);
+    const slotLabel = activeSlot.charAt(0) + activeSlot.slice(1).toLowerCase();
+    showToast(`Cleared all tasks for ${activeDate} (${slotLabel})!`);
   };
 
   const handleDensityChange = (newDensity: TableDensity) => {
@@ -804,6 +872,8 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
 
   const handleDateChange = (newDate: string) => {
     setActiveDate(newDate);
+    localStorage.setItem(LAST_DATE_STORAGE_KEY, newDate);
+    onContextChange?.(newDate, activeSlot);
     logActivity({
       actionType: 'system',
       actionLabel: 'Date Selected',
@@ -819,6 +889,8 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
 
   const handleSelectSlot = (newSlot: ReportSlot) => {
     setActiveSlot(newSlot);
+    localStorage.setItem(LAST_SLOT_STORAGE_KEY, newSlot);
+    onContextChange?.(activeDate, newSlot);
     logActivity({
       actionType: 'system',
       actionLabel: 'Slot Switched',
@@ -867,6 +939,29 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
                 onChange={handleDateChange}
                 buttonClassName="text-xs font-bold py-1 px-2"
               />
+
+              {/* Distinct "Today" Action Button */}
+              {activeDate === getTodayDateStr() ? (
+                <button
+                  type="button"
+                  onClick={() => handleDateChange(getTodayDateStr())}
+                  title="Currently on Today's date"
+                  className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800/60 shadow-2xs hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Today</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleDateChange(getTodayDateStr())}
+                  title={`Jump to Today (${getTodayDateStr()})`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-black rounded-lg transition-all shadow-sm cursor-pointer bg-gradient-to-r from-[#ff2d5f] via-rose-500 to-pink-600 hover:from-[#e62252] hover:to-pink-700 text-white shadow-[#ff2d5f]/25 hover:scale-105 active:scale-95 animate-in fade-in"
+                >
+                  <Sparkles className="w-3 h-3 text-white" />
+                  <span>Today</span>
+                </button>
+              )}
             </div>
 
             <div className="h-4 w-[1px] bg-slate-200 dark:bg-[#142552] hidden sm:block" />
@@ -1181,11 +1276,11 @@ export const ReportBuilderView: React.FC<ReportBuilderViewProps> = ({
       {/* Reset Confirmation Modal */}
       <ConfirmationModal
         isOpen={isResetConfirmOpen}
-        title={`Reset ${activeSlot} Task Table View & Filters?`}
-        description={`Are you sure you want to reset all active search queries, owner & status filters, and restore default 1x compact density for the current ${activeSlot} task table (${activeDate})? Only this active ${activeSlot} table will be affected.`}
-        confirmLabel={`Reset ${activeSlot} View`}
+        title={`Reset & Clear ${activeSlot.charAt(0) + activeSlot.slice(1).toLowerCase()} Tasks?`}
+        description={`Are you sure you want to completely wipe all tasks from the ${activeSlot.charAt(0) + activeSlot.slice(1).toLowerCase()} task table for ${activeDate}? Only this current snapshot (${activeDate} ${activeSlot.charAt(0) + activeSlot.slice(1).toLowerCase()}) will be cleared; other dates and slots will remain unchanged.`}
+        confirmLabel={`Clear ${activeSlot.charAt(0) + activeSlot.slice(1).toLowerCase()} Tasks`}
         cancelLabel="Cancel"
-        variant="warning"
+        variant="danger"
         onClose={() => setIsResetConfirmOpen(false)}
         onConfirm={handleConfirmResetActiveTable}
       />

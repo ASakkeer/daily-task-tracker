@@ -2,8 +2,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus,
   Search,
-  Filter,
-  ArrowUpDown,
   Zap,
   Edit2,
   Trash2,
@@ -16,11 +14,13 @@ import {
   Sparkles,
   Milestone,
   Flag,
-  Tag,
+  Calendar,
+  CalendarDays,
+  Clock,
+  ArrowUpDown,
+  User,
+  Check,
   ChevronDown,
-  X,
-  FileJson,
-  GripVertical,
 } from 'lucide-react';
 import {
   AppMetadata,
@@ -35,10 +35,12 @@ import {
   exportBacklogToJson,
   importBacklogFromJson,
 } from '../../db';
-import { BACKLOG_PRIORITIES, BACKLOG_STATUSES, BACKLOG_TYPES } from './backlogConstants';
+import { BACKLOG_STATUSES, BACKLOG_TYPES, getPriorityBadge } from './backlogConstants';
+import { CustomDropdown } from '../common/CustomDropdown';
 import { BacklogItemModal } from '../modals/BacklogItemModal';
 import { BacklogPushToTaskModal } from '../modals/BacklogPushToTaskModal';
 import { ConfirmationModal, ConfirmationVariant } from '../common/ConfirmationModal';
+import { getTodayDateStr, formatDateSafe } from '../../utils/date';
 import { cn } from '../../utils/cn';
 
 interface BacklogViewProps {
@@ -46,21 +48,18 @@ interface BacklogViewProps {
   onMetadataUpdated: () => void;
 }
 
-type SortField = 'order' | 'priority' | 'points' | 'title' | 'createdAt';
-type SortDirection = 'asc' | 'desc';
+type BacklogTab = 'active' | 'completed';
 
 export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUpdated }) => {
   const [items, setItems] = useState<BacklogItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<BacklogTab>('active');
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [priorityFilter, setPriorityFilter] = useState<string>('ALL');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [sprintFilter, setSprintFilter] = useState<string>('ALL');
-  const [sortField, setSortField] = useState<SortField>('order');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [ownerFilter, setOwnerFilter] = useState<string>('ALL');
 
   // Selected for batch operations
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
@@ -71,6 +70,7 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
   const [pushingItem, setPushingItem] = useState<BacklogItem | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+
   // Confirmation modal
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
@@ -78,7 +78,6 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
     description: string;
     confirmLabel?: string;
     variant?: ConfirmationVariant;
-    isAlertOnly?: boolean;
     onConfirm: () => void;
   }>({
     isOpen: false,
@@ -91,6 +90,7 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
 
   const currentActor = metadata.owners?.[0]?.name || 'Admin';
   const currentActorRole = metadata.owners?.[0]?.role || 'Team Lead';
+  const todayStr = getTodayDateStr();
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -99,7 +99,7 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
 
   const loadItems = async () => {
     try {
-      const allItems = await db.backlogItems.orderBy('order').toArray();
+      const allItems = await db.backlogItems.toArray();
       setItems(allItems);
     } catch (err) {
       console.error('Failed to load backlog items:', err);
@@ -112,11 +112,33 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
     loadItems();
   }, []);
 
-  // Filtered & Sorted Items
-  const filteredItems = useMemo(() => {
-    return items
+  // Split into active and completed datasets
+  const activeItems = useMemo(() => items.filter((i) => i.status !== 'completed'), [items]);
+  const completedItems = useMemo(() => items.filter((i) => i.status === 'completed'), [items]);
+
+  // Priority count & due today count for metrics
+  const dueTodayCount = useMemo(() => {
+    return activeItems.filter((i) => i.targetDate === todayStr).length;
+  }, [activeItems, todayStr]);
+
+  const overdueCount = useMemo(() => {
+    return activeItems.filter((i) => i.targetDate && i.targetDate < todayStr).length;
+  }, [activeItems, todayStr]);
+
+  const criticalP0P1Count = useMemo(() => {
+    return activeItems.filter((i) => {
+      const p = (i.priority || '').toUpperCase();
+      return p.includes('P0') || p.includes('P1');
+    }).length;
+  }, [activeItems]);
+
+  // Filter and sort items based on activeTab
+  const displayedItems = useMemo(() => {
+    const sourceList = activeTab === 'active' ? activeItems : completedItems;
+
+    return sourceList
       .filter((item) => {
-        // Search
+        // Search Filter
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           const matchTitle = item.title.toLowerCase().includes(q);
@@ -138,63 +160,57 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
         }
 
         // Priority filter
-        if (priorityFilter !== 'ALL' && item.priority !== priorityFilter) {
-          return false;
+        if (priorityFilter !== 'ALL') {
+          const p = (item.priority || '').toUpperCase();
+          if (!p.includes(priorityFilter)) return false;
         }
 
-        // Status filter
-        if (statusFilter !== 'ALL' && item.status !== statusFilter) {
-          return false;
-        }
-
-        // Sprint filter
-        if (sprintFilter !== 'ALL' && item.targetSprint !== sprintFilter) {
-          return false;
+        // Owner filter
+        if (ownerFilter !== 'ALL') {
+          if (!(item.ownerIds || []).includes(ownerFilter)) return false;
         }
 
         return true;
       })
       .sort((a, b) => {
-        let cmp = 0;
-        if (sortField === 'order') {
-          cmp = (a.order || 0) - (b.order || 0);
-        } else if (sortField === 'priority') {
-          const priorityWeight: Record<BacklogPriority, number> = {
-            P0_CRITICAL: 0,
-            P1_HIGH: 1,
-            P2_MEDIUM: 2,
-            P3_LOW: 3,
-          };
-          cmp = priorityWeight[a.priority] - priorityWeight[b.priority];
-        } else if (sortField === 'points') {
-          cmp = (a.storyPoints || 0) - (b.storyPoints || 0);
-        } else if (sortField === 'title') {
-          cmp = a.title.localeCompare(b.title);
-        } else if (sortField === 'createdAt') {
-          cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        if (activeTab === 'completed') {
+          // Completed tab: Sort by completedDate descending (newest completed first)
+          const dateA = a.completedDate || a.updatedAt || a.createdAt;
+          const dateB = b.completedDate || b.updatedAt || b.createdAt;
+          return dateB.localeCompare(dateA);
         }
-        return sortDirection === 'asc' ? cmp : -cmp;
+
+        // Active Backlog: Order properly based on dates!
+        // 1. Overdue (< today) & Today (= today) come first
+        const hasDateA = !!a.targetDate;
+        const hasDateB = !!b.targetDate;
+
+        if (!hasDateA && !hasDateB) return (a.order || 0) - (b.order || 0);
+        if (!hasDateA) return 1; // items without date go to the bottom
+        if (!hasDateB) return -1;
+
+        const isTodayA = a.targetDate === todayStr;
+        const isTodayB = b.targetDate === todayStr;
+        const isOverdueA = (a.targetDate || '') < todayStr;
+        const isOverdueB = (b.targetDate || '') < todayStr;
+
+        // Today items at top
+        if (isTodayA && !isTodayB && !isOverdueB) return -1;
+        if (isTodayB && !isTodayA && !isOverdueA) return 1;
+
+        // Overdue items
+        if (isOverdueA && !isOverdueB && !isTodayB) return -1;
+        if (isOverdueB && !isOverdueA && !isTodayA) return 1;
+
+        // Both future or both past: sort chronologically ascending
+        return (a.targetDate || '').localeCompare(b.targetDate || '');
       });
-  }, [items, searchQuery, typeFilter, priorityFilter, statusFilter, sprintFilter, sortField, sortDirection, metadata.owners]);
+  }, [activeTab, activeItems, completedItems, searchQuery, typeFilter, priorityFilter, ownerFilter, todayStr, metadata.owners]);
 
-  // Metrics
-  const metrics = useMemo(() => {
-    const totalItems = items.length;
-    const totalPoints = items.reduce((acc, i) => acc + (i.storyPoints || 0), 0);
-    const criticalHighCount = items.filter(
-      (i) => i.priority === 'P0_CRITICAL' || i.priority === 'P1_HIGH'
-    ).length;
-    const readyForDevCount = items.filter((i) => i.status === 'ready_for_dev').length;
-    const inProgressCount = items.filter((i) => i.status === 'in_progress').length;
-
-    return { totalItems, totalPoints, criticalHighCount, readyForDevCount, inProgressCount };
-  }, [items]);
-
-  // Handle Save (Create or Update)
-  const handleSaveItem = async (
-    itemData: Omit<BacklogItem, 'id' | 'order' | 'createdAt' | 'updatedAt'>
-  ) => {
+  // Save / Update Item
+  const handleSaveItem = async (itemData: Omit<BacklogItem, 'id' | 'order' | 'createdAt' | 'updatedAt'>) => {
     const now = new Date().toISOString();
+
     if (editingItem) {
       const updated: BacklogItem = {
         ...editingItem,
@@ -203,14 +219,14 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
       };
       await db.backlogItems.put(updated);
       await logActivity({
-        actionType: 'backlog_update',
+        actionType: 'task_update',
         actionLabel: 'Updated Backlog Item',
         entityType: 'backlog',
         entityId: updated.id,
         entityTitle: updated.title,
         actor: currentActor,
         actorRole: currentActorRole,
-        details: `Updated details for backlog work item "${updated.title}".`,
+        details: `Updated details for work item "${updated.title}".`,
         severity: 'info',
       });
       showToast(`Work item "${updated.title}" updated.`);
@@ -225,7 +241,7 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
       };
       await db.backlogItems.put(newItem);
       await logActivity({
-        actionType: 'backlog_create',
+        actionType: 'task_create',
         actionLabel: 'Created Backlog Item',
         entityType: 'backlog',
         entityId: newItem.id,
@@ -233,7 +249,7 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
         actor: currentActor,
         actorRole: currentActorRole,
         details: `Created new ${newItem.type} backlog item "${newItem.title}" with priority ${newItem.priority}.`,
-        severity: 'success',
+        severity: 'info',
       });
       showToast(`Work item "${newItem.title}" created.`);
     }
@@ -241,182 +257,108 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
     setEditingItem(null);
   };
 
-  // Handle Quick Status Change
+  // Quick Status Change
   const handleQuickStatusChange = async (itemId: string, newStatus: BacklogStatus) => {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
 
-    await db.backlogItems.update(itemId, {
+    const updates: Partial<BacklogItem> = {
       status: newStatus,
       updatedAt: new Date().toISOString(),
-    });
+    };
+
+    if (newStatus === 'completed' && !item.completedDate) {
+      updates.completedDate = todayStr;
+    } else if (newStatus !== 'completed' && item.completedDate) {
+      updates.completedDate = undefined;
+    }
+
+    await db.backlogItems.update(itemId, updates);
 
     await logActivity({
-      actionType: 'backlog_update',
+      actionType: 'status_change',
       actionLabel: 'Backlog Status Changed',
       entityType: 'backlog',
       entityId: itemId,
       entityTitle: item.title,
       actor: currentActor,
       actorRole: currentActorRole,
-      details: `Status changed from ${BACKLOG_STATUSES[item.status]?.label} to ${BACKLOG_STATUSES[newStatus]?.label}`,
+      details: `Status of "${item.title}" changed from ${BACKLOG_STATUSES[item.status]?.label || item.status} to ${BACKLOG_STATUSES[newStatus]?.label || newStatus}`,
       severity: 'info',
     });
 
-    setItems((prev) =>
-      prev.map((i) => (i.id === itemId ? { ...i, status: newStatus, updatedAt: new Date().toISOString() } : i))
-    );
+    showToast(`Status changed to ${BACKLOG_STATUSES[newStatus]?.label || newStatus}`);
+    loadItems();
   };
 
-  // Handle Quick Priority Change
-  const handleQuickPriorityChange = async (itemId: string, newPriority: BacklogPriority) => {
-    const item = items.find((i) => i.id === itemId);
-    if (!item) return;
-
-    await db.backlogItems.update(itemId, {
-      priority: newPriority,
-      updatedAt: new Date().toISOString(),
-    });
-
-    setItems((prev) =>
-      prev.map((i) => (i.id === itemId ? { ...i, priority: newPriority, updatedAt: new Date().toISOString() } : i))
-    );
-  };
-
-  // Handle Delete
+  // Delete Single Item with Confirmation
   const handleDeleteItem = (item: BacklogItem) => {
     setConfirmDialog({
       isOpen: true,
-      title: 'Delete Backlog Item',
-      description: `Are you sure you want to delete "${item.title}"? This action will permanently remove the item from the backlog.`,
+      title: 'Delete Backlog Item?',
+      description: `Are you sure you want to delete "${item.title}"? This item will be permanently removed from the backlog.`,
       confirmLabel: 'Delete Item',
       variant: 'danger',
       onConfirm: async () => {
         await db.backlogItems.delete(item.id);
         await logActivity({
-          actionType: 'backlog_delete',
+          actionType: 'task_delete',
           actionLabel: 'Deleted Backlog Item',
           entityType: 'backlog',
           entityId: item.id,
           entityTitle: item.title,
           actor: currentActor,
           actorRole: currentActorRole,
-          details: `Deleted work item "${item.title}" from the product backlog.`,
+          details: `Deleted work item "${item.title}" from the backlog.`,
           severity: 'danger',
         });
         showToast(`Work item "${item.title}" deleted.`);
         loadItems();
+        setSelectedItemIds((prev) => prev.filter((id) => id !== item.id));
       },
     });
   };
 
-  // Handle Batch Delete
+  // Batch Delete with Confirmation
   const handleBatchDelete = () => {
     if (selectedItemIds.length === 0) return;
     setConfirmDialog({
       isOpen: true,
-      title: `Delete ${selectedItemIds.length} Work Items`,
-      description: `Are you sure you want to permanently delete the ${selectedItemIds.length} selected backlog work items?`,
+      title: `Delete ${selectedItemIds.length} Selected Items?`,
+      description: `Are you sure you want to permanently delete the ${selectedItemIds.length} selected backlog work items? This cannot be undone.`,
       confirmLabel: 'Delete Selected',
       variant: 'danger',
       onConfirm: async () => {
         await db.backlogItems.bulkDelete(selectedItemIds);
         await logActivity({
-          actionType: 'backlog_delete',
+          actionType: 'batch_delete',
           actionLabel: 'Batch Deleted Backlog Items',
           entityType: 'backlog',
           entityId: 'batch_delete',
           entityTitle: `${selectedItemIds.length} Work Items`,
           actor: currentActor,
           actorRole: currentActorRole,
-          details: `Batch deleted ${selectedItemIds.length} work items from the backlog.`,
+          details: `Batch deleted ${selectedItemIds.length} items from backlog.`,
           severity: 'danger',
         });
-        showToast(`${selectedItemIds.length} work items deleted.`);
+        showToast(`Deleted ${selectedItemIds.length} items.`);
         setSelectedItemIds([]);
         loadItems();
       },
     });
   };
 
-  // Handle Export Backlog JSON
-  const handleExportJson = async () => {
-    try {
-      const jsonStr = await exportBacklogToJson();
-      const blob = new Blob([jsonStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Daily-Task-Tracker-Backlog-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      showToast('Backlog JSON downloaded successfully.');
-    } catch (err: any) {
-      showToast(`Export failed: ${err.message}`);
+  // Select all visible
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      setSelectedItemIds(displayedItems.map((i) => i.id));
+    } else {
+      setSelectedItemIds([]);
     }
   };
 
-  // Handle Import Backlog JSON
-  const handleImportJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const text = await file.text();
-      const result = await importBacklogFromJson(text);
-      if (result.success) {
-        showToast(result.summary || 'Backlog restored successfully.');
-        loadItems();
-      } else {
-        setConfirmDialog({
-          isOpen: true,
-          title: 'Invalid Backlog File',
-          description: result.error || 'Failed to parse JSON file.',
-          confirmLabel: 'Dismiss',
-          isAlertOnly: true,
-          variant: 'danger',
-          onConfirm: () => {},
-        });
-      }
-    } catch (err: any) {
-      showToast(`Restore failed: ${err.message}`);
-    } finally {
-      e.target.value = '';
-    }
-  };
-
-  // Move priority order up / down
-  const handleMoveOrder = async (index: number, direction: 'up' | 'down') => {
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= filteredItems.length) return;
-
-    const currentItem = filteredItems[index];
-    const targetItem = filteredItems[targetIndex];
-
-    const currentOrder = currentItem.order;
-    const targetOrder = targetItem.order;
-
-    await db.backlogItems.update(currentItem.id, { order: targetOrder });
-    await db.backlogItems.update(targetItem.id, { order: currentOrder });
-
-    loadItems();
-  };
-
-  const hasActiveFilters =
-    searchQuery.trim() !== '' ||
-    typeFilter !== 'ALL' ||
-    priorityFilter !== 'ALL' ||
-    statusFilter !== 'ALL' ||
-    sprintFilter !== 'ALL';
-
-  const resetFilters = () => {
-    setSearchQuery('');
-    setTypeFilter('ALL');
-    setPriorityFilter('ALL');
-    setStatusFilter('ALL');
-    setSprintFilter('ALL');
+  const handleToggleSelect = (id: string) => {
+    setSelectedItemIds((prev) => (prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]));
   };
 
   return (
@@ -429,19 +371,485 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
         </div>
       )}
 
-      {/* Confirmation Modal */}
-      <ConfirmationModal
-        isOpen={confirmDialog.isOpen}
-        title={confirmDialog.title}
-        description={confirmDialog.description}
-        confirmLabel={confirmDialog.confirmLabel}
-        variant={confirmDialog.variant}
-        isAlertOnly={confirmDialog.isAlertOnly}
-        onConfirm={confirmDialog.onConfirm}
-        onCancel={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
-      />
+      {/* TOP HEADER & ACTION BAR */}
+      <div className="bg-white dark:bg-[#050c21] p-4 rounded-2xl border border-slate-200 dark:border-[#142552] shadow-sm dark:shadow-xl transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#ff2d5f] to-rose-600 text-white flex items-center justify-center shadow-md shadow-[#ff2d5f]/25 font-black text-sm">
+              <Layers className="w-4 h-4" />
+            </div>
+            <h1 className="text-base font-black text-slate-900 dark:text-white tracking-tight uppercase">
+              Work Item Backlog
+            </h1>
+            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-100 dark:bg-[#ff2d5f]/20 text-[#ff2d5f]">
+              Target Date Driven
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">
+            Simplified work item tracker organized by target dates with instant daily task push.
+          </p>
+        </div>
 
-      {/* Add / Edit Backlog Modal */}
+        <div className="flex items-center gap-2">
+          {selectedItemIds.length > 0 && (
+            <button
+              type="button"
+              onClick={handleBatchDelete}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/60 rounded-xl text-xs font-bold transition-all hover:bg-rose-100 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected ({selectedItemIds.length})</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setEditingItem(null);
+              setIsModalOpen(true);
+            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#ff2d5f] hover:bg-[#e62252] text-white rounded-xl text-xs font-black transition-all shadow-md shadow-[#ff2d5f]/25 hover:scale-102 active:scale-98 cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+            <span>New Work Item</span>
+          </button>
+        </div>
+      </div>
+
+      {/* TOP COMPACT METRIC CARDS */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-white dark:bg-[#050c21] p-3 rounded-xl border border-slate-200 dark:border-[#142552] shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Active Backlog</span>
+            <Layers className="w-3.5 h-3.5 text-[#ff2d5f]" />
+          </div>
+          <div className="text-xl font-black text-slate-900 dark:text-white font-mono mt-1">
+            {activeItems.length}
+          </div>
+          <span className="text-[10px] text-slate-400 font-medium">In-flight work items</span>
+        </div>
+
+        <div className="bg-white dark:bg-[#050c21] p-3 rounded-xl border border-slate-200 dark:border-[#142552] shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Due Today</span>
+            <Clock className="w-3.5 h-3.5 text-amber-500" />
+          </div>
+          <div className="text-xl font-black text-amber-600 dark:text-amber-400 font-mono mt-1">
+            {dueTodayCount}
+          </div>
+          <span className="text-[10px] text-slate-400 font-medium">
+            {overdueCount > 0 ? `${overdueCount} overdue` : 'On track for today'}
+          </span>
+        </div>
+
+        <div className="bg-white dark:bg-[#050c21] p-3 rounded-xl border border-slate-200 dark:border-[#142552] shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">High Priority</span>
+            <Flag className="w-3.5 h-3.5 text-rose-500" />
+          </div>
+          <div className="text-xl font-black text-[#ff2d5f] font-mono mt-1">
+            {criticalP0P1Count}
+          </div>
+          <span className="text-[10px] text-slate-400 font-medium">P0 Critical &amp; P1 High</span>
+        </div>
+
+        <div className="bg-white dark:bg-[#050c21] p-3 rounded-xl border border-slate-200 dark:border-[#142552] shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Completed</span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+          </div>
+          <div className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono mt-1">
+            {completedItems.length}
+          </div>
+          <span className="text-[10px] text-slate-400 font-medium">Archived as completed</span>
+        </div>
+      </div>
+
+      {/* TWO TABS: ACTIVE BACKLOG & COMPLETED */}
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 dark:border-[#142552] pb-1">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setActiveTab('active')}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer',
+              activeTab === 'active'
+                ? 'bg-[#ff2d5f] text-white shadow-md shadow-[#ff2d5f]/25 scale-102'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#08122f]'
+            )}
+          >
+            <span>Active Backlog</span>
+            <span
+              className={cn(
+                'px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold',
+                activeTab === 'active' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-[#142552] text-slate-700 dark:text-slate-300'
+              )}
+            >
+              {activeItems.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('completed')}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer',
+              activeTab === 'completed'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/25 scale-102'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-[#08122f]'
+            )}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Completed Archive</span>
+            <span
+              className={cn(
+                'px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold',
+                activeTab === 'completed' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-[#142552] text-slate-700 dark:text-slate-300'
+              )}
+            >
+              {completedItems.length}
+            </span>
+          </button>
+        </div>
+
+        {/* Informational sorting note */}
+        <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium hidden md:inline">
+          {activeTab === 'active' ? '⚡ Sorted: Today on top → Future target dates below' : '✅ Sorted: Most recently completed first'}
+        </span>
+      </div>
+
+      {/* MINIMAL FILTER TOOLBAR */}
+      <div className="bg-white dark:bg-[#050c21] p-3 rounded-xl border border-slate-200 dark:border-[#142552] shadow-sm flex flex-wrap items-center justify-between gap-2.5 text-xs">
+        {/* Search */}
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search work items, epics, notes..."
+            className="w-full pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-[#020612] border border-slate-200 dark:border-[#142552] rounded-lg text-xs font-semibold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-[#ff2d5f]"
+          />
+        </div>
+
+        {/* Filter dropdowns */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Priority filter */}
+          <div className="w-[125px]">
+            <CustomDropdown
+              value={priorityFilter}
+              onChange={setPriorityFilter}
+              options={[
+                { value: 'ALL', label: 'All Priorities' },
+                { value: 'P0', label: 'P0 Critical' },
+                { value: 'P1', label: 'P1 High' },
+                { value: 'P2', label: 'P2 Medium' },
+                { value: 'P3', label: 'P3 Low' },
+              ]}
+              className="w-full"
+              buttonClassName="py-1 px-2.5 text-xs font-bold"
+            />
+          </div>
+
+          {/* Type filter */}
+          <div className="w-[125px]">
+            <CustomDropdown
+              value={typeFilter}
+              onChange={setTypeFilter}
+              options={[
+                { value: 'ALL', label: 'All Types' },
+                ...Object.values(BACKLOG_TYPES).map((t) => ({
+                  value: t.value,
+                  label: t.label,
+                })),
+              ]}
+              className="w-full"
+              buttonClassName="py-1 px-2.5 text-xs font-bold"
+            />
+          </div>
+
+          {/* Owner filter */}
+          {metadata.owners && metadata.owners.length > 0 && (
+            <div className="w-[140px]">
+              <CustomDropdown
+                value={ownerFilter}
+                onChange={setOwnerFilter}
+                options={[
+                  { value: 'ALL', label: 'All Assignees' },
+                  ...metadata.owners.map((o) => ({
+                    value: o.id,
+                    label: o.name,
+                    avatarColor: o.avatarColor,
+                  })),
+                ]}
+                className="w-full"
+                buttonClassName="py-1 px-2.5 text-xs font-bold"
+              />
+            </div>
+          )}
+
+          {(searchQuery || typeFilter !== 'ALL' || priorityFilter !== 'ALL' || ownerFilter !== 'ALL') && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setTypeFilter('ALL');
+                setPriorityFilter('ALL');
+                setOwnerFilter('ALL');
+              }}
+              className="px-2 py-1 text-slate-500 hover:text-[#ff2d5f] text-xs font-bold cursor-pointer"
+            >
+              Reset Filters
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* MINIMAL BACKLOG TABLE */}
+      <div className="bg-white dark:bg-[#050c21] rounded-2xl border border-slate-200 dark:border-[#142552] shadow-sm dark:shadow-xl overflow-hidden transition-colors">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="bg-slate-50 dark:bg-[#020612] border-b border-slate-200 dark:border-[#142552] text-slate-500 dark:text-slate-400 font-black uppercase text-[10px] tracking-wider select-none">
+                <th className="py-2.5 px-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={displayedItems.length > 0 && selectedItemIds.length === displayedItems.length}
+                    onChange={handleSelectAll}
+                    className="w-3.5 h-3.5 text-[#ff2d5f] rounded border-slate-300 focus:ring-[#ff2d5f]"
+                  />
+                </th>
+                <th className="py-2.5 px-3 w-12 text-center">#</th>
+                <th className="py-2.5 px-3 w-16 text-center">Priority</th>
+                <th className="py-2.5 px-4 min-w-[260px]">Work Item Summary / Task Details</th>
+                <th className="py-2.5 px-3 w-32">Status</th>
+                <th className="py-2.5 px-3 w-36">Assignee</th>
+                <th className="py-2.5 px-3 w-28">Created Date</th>
+                <th className="py-2.5 px-3 w-32">
+                  <div className="flex items-center gap-1 text-[#ff2d5f]">
+                    <span>Target Date</span>
+                    <ArrowUpDown className="w-3 h-3" />
+                  </div>
+                </th>
+                {activeTab === 'completed' && <th className="py-2.5 px-3 w-32">Completed Date</th>}
+                <th className="py-2.5 px-3 w-28 text-right">Actions</th>
+              </tr>
+            </thead>
+
+            <tbody className="divide-y divide-slate-100 dark:divide-[#142552]/40">
+              {displayedItems.length === 0 ? (
+                <tr>
+                  <td colSpan={activeTab === 'completed' ? 10 : 9} className="py-12 text-center text-slate-400 text-xs">
+                    {activeTab === 'active'
+                      ? 'No active work items found. Click "+ New Work Item" to plan a task.'
+                      : 'No completed work items in the archive yet.'}
+                  </td>
+                </tr>
+              ) : (
+                displayedItems.map((item, index) => {
+                  const pBadge = getPriorityBadge(item.priority, metadata.backlogConfig?.priorities);
+                  const isSelected = selectedItemIds.includes(item.id);
+                  const isToday = item.targetDate === todayStr;
+                  const isOverdue = item.targetDate && item.targetDate < todayStr && item.status !== 'completed';
+
+                  // Assignee resolution
+                  const ownerNames = item.customOwnerText
+                    ? item.customOwnerText
+                    : (item.ownerIds || [])
+                        .map((id) => metadata.owners.find((o) => o.id === id)?.name)
+                        .filter(Boolean)
+                        .join(', ') || 'Unassigned';
+
+                  return (
+                    <tr
+                      key={item.id}
+                      className={cn(
+                        'transition-colors hover:bg-slate-50/80 dark:hover:bg-[#08122f]/60',
+                        isSelected ? 'bg-rose-50/50 dark:bg-[#ff2d5f]/10' : '',
+                        isToday && activeTab === 'active' ? 'bg-amber-50/20 dark:bg-amber-950/10' : ''
+                      )}
+                    >
+                      {/* Checkbox */}
+                      <td className="py-2 px-3">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelect(item.id)}
+                          className="w-3.5 h-3.5 text-[#ff2d5f] rounded border-slate-300 focus:ring-[#ff2d5f]"
+                        />
+                      </td>
+
+                      {/* Rank / Index */}
+                      <td className="py-2 px-3 text-center font-mono font-bold text-slate-400 text-[11px]">
+                        #{index + 1}
+                      </td>
+
+                      {/* Minimal Priority: P0, P1, P2, P3 */}
+                      <td className="py-2 px-3 text-center">
+                        <span
+                          className="inline-block px-2 py-0.5 rounded text-[11px] font-black font-mono border"
+                          style={{
+                            backgroundColor: pBadge.bgColor,
+                            color: pBadge.color,
+                            borderColor: pBadge.badgeBorder,
+                          }}
+                        >
+                          {pBadge.label}
+                        </span>
+                      </td>
+
+                      {/* Work Item Summary */}
+                      <td className="py-2 px-4">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={cn(
+                              'font-bold text-slate-900 dark:text-white',
+                              item.status === 'completed' ? 'line-through text-slate-400 dark:text-slate-500' : ''
+                            )}
+                          >
+                            {item.title}
+                          </span>
+
+                          {/* Type Pill */}
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-bold uppercase bg-slate-100 dark:bg-[#08122f] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-[#142552]">
+                            {item.type}
+                          </span>
+
+                          {/* Optional Module Epic */}
+                          {item.moduleEpic && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/40">
+                              {item.moduleEpic}
+                            </span>
+                          )}
+
+                          {item.storyPoints !== undefined && (
+                            <span className="text-[10px] font-mono text-slate-400">
+                              {item.storyPoints} pts
+                            </span>
+                          )}
+                        </div>
+
+                        {item.notes && (
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-lg mt-0.5">
+                            {item.notes}
+                          </p>
+                        )}
+                      </td>
+
+                      {/* Status Dropdown Pill (Unconstrained Floating Portal) */}
+                      <td className="py-2 px-3">
+                        <div className="w-[120px]">
+                          <CustomDropdown
+                            value={item.status}
+                            onChange={(newStatus) => handleQuickStatusChange(item.id, newStatus as BacklogStatus)}
+                            options={Object.values(BACKLOG_STATUSES).map((st) => ({
+                              value: st.value,
+                              label: st.label,
+                              className: cn(st.badgeBg, st.badgeText, st.badgeBorder),
+                            }))}
+                            pillMode
+                            className="w-full"
+                            buttonClassName="px-2 py-0.5 text-[11px] font-bold rounded-lg border shadow-none"
+                          />
+                        </div>
+                      </td>
+
+                      {/* Assignee */}
+                      <td className="py-2 px-3">
+                        <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 font-semibold truncate">
+                          <User className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                          <span className="truncate">{ownerNames}</span>
+                        </div>
+                      </td>
+
+                      {/* Created Date */}
+                      <td className="py-2 px-3 font-mono text-[11px] text-slate-500 whitespace-nowrap">
+                        {formatDateSafe(item.createdAt, 'dd-MMM-yyyy')}
+                      </td>
+
+                      {/* Target Date */}
+                      <td className="py-2 px-3 whitespace-nowrap">
+                        {item.targetDate ? (
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={cn(
+                                'font-mono text-[11px] font-bold',
+                                isToday ? 'text-amber-600 dark:text-amber-400 font-black' : '',
+                                isOverdue ? 'text-rose-600 dark:text-rose-400 font-black' : 'text-slate-700 dark:text-slate-300'
+                              )}
+                            >
+                              {formatDateSafe(item.targetDate, 'dd-MMM-yyyy')}
+                            </span>
+                            {isToday && (
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700">
+                                Today
+                              </span>
+                            )}
+                            {isOverdue && (
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-700">
+                                Overdue
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 italic text-[11px]">—</span>
+                        )}
+                      </td>
+
+                      {/* Completed Date (Only in Completed Tab) */}
+                      {activeTab === 'completed' && (
+                        <td className="py-2 px-3 font-mono text-[11px] text-emerald-600 dark:text-emerald-400 font-bold whitespace-nowrap">
+                          {item.completedDate ? formatDateSafe(item.completedDate, 'dd-MMM-yyyy') : formatDateSafe(item.updatedAt, 'dd-MMM-yyyy')}
+                        </td>
+                      )}
+
+                      {/* Actions */}
+                      <td className="py-2 px-3 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1">
+                          {/* Push to Daily Tasks Button */}
+                          <button
+                            type="button"
+                            onClick={() => setPushingItem(item)}
+                            className="p-1.5 text-slate-500 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-lg transition-colors cursor-pointer"
+                            title="Push item directly into today's daily report table"
+                          >
+                            <Zap className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Edit Button */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingItem(item);
+                              setIsModalOpen(true);
+                            }}
+                            className="p-1.5 text-slate-500 hover:text-[#ff2d5f] hover:bg-rose-50 dark:hover:bg-[#ff2d5f]/15 rounded-lg transition-colors cursor-pointer"
+                            title="Edit work item details"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Delete Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteItem(item)}
+                            className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                            title="Delete work item permanently"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* CREATE / EDIT BACKLOG ITEM MODAL */}
       <BacklogItemModal
         isOpen={isModalOpen}
         onClose={() => {
@@ -453,7 +861,7 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
         metadata={metadata}
       />
 
-      {/* Push to Tasks Modal */}
+      {/* PUSH TO DAILY TASK MODAL */}
       <BacklogPushToTaskModal
         isOpen={!!pushingItem}
         onClose={() => setPushingItem(null)}
@@ -465,543 +873,16 @@ export const BacklogView: React.FC<BacklogViewProps> = ({ metadata, onMetadataUp
         }}
       />
 
-      {/* Hidden File Input for JSON Restore */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        accept=".json"
-        onChange={handleImportJson}
-        className="hidden"
+      {/* CONFIRMATION MODAL */}
+      <ConfirmationModal
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        description={confirmDialog.description}
+        confirmLabel={confirmDialog.confirmLabel}
+        variant={confirmDialog.variant}
+        onClose={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
       />
-
-      {/* KPI Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-white dark:bg-[#050c21] p-3.5 rounded-xl border border-slate-200 dark:border-[#142552] shadow-sm">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Total Work Items</span>
-            <Layers className="w-3.5 h-3.5 text-blue-500" />
-          </div>
-          <div className="text-xl font-black text-slate-900 dark:text-white">{metrics.totalItems}</div>
-          <span className="text-[10px] text-slate-400 font-medium">Sprint &amp; Product scope</span>
-        </div>
-
-        <div className="bg-white dark:bg-[#050c21] p-3.5 rounded-xl border border-slate-200 dark:border-[#142552] shadow-sm">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Total Story Points</span>
-            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-          </div>
-          <div className="text-xl font-black text-slate-900 dark:text-white">{metrics.totalPoints} pts</div>
-          <span className="text-[10px] text-slate-400 font-medium">Estimated team effort</span>
-        </div>
-
-        <div className="bg-white dark:bg-[#050c21] p-3.5 rounded-xl border border-slate-200 dark:border-[#142552] shadow-sm">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">P0 / P1 Urgent</span>
-            <Flag className="w-3.5 h-3.5 text-[#ff2d5f]" />
-          </div>
-          <div className="text-xl font-black text-[#ff2d5f]">{metrics.criticalHighCount}</div>
-          <span className="text-[10px] text-slate-400 font-medium">Requires immediate dev</span>
-        </div>
-
-        <div className="bg-white dark:bg-[#050c21] p-3.5 rounded-xl border border-slate-200 dark:border-[#142552] shadow-sm">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Ready for Dev</span>
-            <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500" />
-          </div>
-          <div className="text-xl font-black text-indigo-600 dark:text-indigo-400">{metrics.readyForDevCount}</div>
-          <span className="text-[10px] text-slate-400 font-medium">Refined &amp; prioritized</span>
-        </div>
-      </div>
-
-      {/* Sticky Command Bar & Filter Toolbar */}
-      <div className="bg-white dark:bg-[#050c21] p-3.5 rounded-2xl border border-slate-200 dark:border-[#142552] shadow-sm space-y-3">
-        {/* Top Actions Row */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          {/* Search Box */}
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search work items, epics, notes, assignees..."
-              className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 dark:bg-[#020612] border border-slate-200 dark:border-[#142552] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#ff2d5f] font-semibold text-slate-900 dark:text-white placeholder-slate-400"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-
-          {/* Action CTAs */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleExportJson}
-              className="px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-[#08122f] rounded-xl border border-slate-200 dark:border-[#142552] transition-colors cursor-pointer flex items-center gap-1.5"
-              title="Download Backlog as JSON"
-            >
-              <FileJson className="w-3.5 h-3.5 text-cyan-500" />
-              <span>Export</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-[#08122f] rounded-xl border border-slate-200 dark:border-[#142552] transition-colors cursor-pointer flex items-center gap-1.5"
-              title="Upload & Restore Backlog from JSON"
-            >
-              <Upload className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Restore</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setEditingItem(null);
-                setIsModalOpen(true);
-              }}
-              className="px-4 py-2 text-xs font-black text-white bg-[#ff2d5f] hover:bg-[#e02653] shadow-md shadow-[#ff2d5f]/20 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ml-auto sm:ml-0"
-            >
-              <Plus className="w-4 h-4 stroke-[3]" />
-              <span>Add Backlog Item</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Filter Dropdowns Bar */}
-        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100 dark:border-[#142552]/60 text-xs">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-            <Filter className="w-3 h-3 text-[#ff2d5f]" />
-            Filters:
-          </span>
-
-          {/* Type Filter */}
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#020612] border border-slate-200 dark:border-[#142552] rounded-lg font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#ff2d5f]"
-          >
-            <option value="ALL">All Types</option>
-            {Object.values(BACKLOG_TYPES).map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Priority Filter */}
-          <select
-            value={priorityFilter}
-            onChange={(e) => setPriorityFilter(e.target.value)}
-            className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#020612] border border-slate-200 dark:border-[#142552] rounded-lg font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#ff2d5f]"
-          >
-            <option value="ALL">All Priorities</option>
-            {Object.values(BACKLOG_PRIORITIES).map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#020612] border border-slate-200 dark:border-[#142552] rounded-lg font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#ff2d5f]"
-          >
-            <option value="ALL">All Statuses</option>
-            {Object.values(BACKLOG_STATUSES).map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Sprint Filter */}
-          {metadata.backlogConfig?.sprints && metadata.backlogConfig.sprints.length > 0 && (
-            <select
-              value={sprintFilter}
-              onChange={(e) => setSprintFilter(e.target.value)}
-              className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#020612] border border-slate-200 dark:border-[#142552] rounded-lg font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#ff2d5f]"
-            >
-              <option value="ALL">All Sprints</option>
-              {metadata.backlogConfig.sprints.map((sp) => (
-                <option key={sp} value={sp}>
-                  {sp}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* Sort Field */}
-          <div className="flex items-center gap-1 ml-auto">
-            <span className="text-[11px] font-bold text-slate-400">Sort:</span>
-            <select
-              value={sortField}
-              onChange={(e) => setSortField(e.target.value as SortField)}
-              className="px-2 py-1 bg-slate-50 dark:bg-[#020612] border border-slate-200 dark:border-[#142552] rounded-lg font-semibold text-slate-800 dark:text-slate-200 focus:outline-none text-xs"
-            >
-              <option value="order">Manual Priority Order</option>
-              <option value="priority">Priority Level</option>
-              <option value="points">Story Points</option>
-              <option value="title">Item Title</option>
-              <option value="createdAt">Date Created</option>
-            </select>
-            <button
-              type="button"
-              onClick={() => setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-              className="p-1 text-slate-500 hover:text-slate-900 dark:hover:text-white rounded border border-slate-200 dark:border-[#142552]"
-              title={`Sorting ${sortDirection.toUpperCase()}`}
-            >
-              <ArrowUpDown className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {hasActiveFilters && (
-            <button
-              type="button"
-              onClick={resetFilters}
-              className="text-[11px] font-bold text-[#ff2d5f] hover:underline cursor-pointer"
-            >
-              Reset Filters
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Batch Operations Bar */}
-      {selectedItemIds.length > 0 && (
-        <div className="bg-slate-900 dark:bg-[#08122f] text-white p-3 rounded-xl border border-slate-800 dark:border-[#ff2d5f]/30 flex items-center justify-between animate-in slide-in-from-top-1">
-          <div className="flex items-center gap-2 text-xs font-bold">
-            <span className="px-2 py-0.5 bg-[#ff2d5f] text-white rounded text-[11px]">
-              {selectedItemIds.length} Selected
-            </span>
-            <span>Batch actions ready</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedItemIds([])}
-              className="px-3 py-1 text-xs font-semibold hover:bg-white/10 rounded-lg transition-colors"
-            >
-              Deselect All
-            </button>
-            <button
-              type="button"
-              onClick={handleBatchDelete}
-              className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Delete Selected</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Interactive Backlog Table */}
-      <div className="bg-white dark:bg-[#050c21] rounded-2xl border border-slate-200 dark:border-[#142552] shadow-sm dark:shadow-xl overflow-hidden transition-colors">
-        {filteredItems.length === 0 ? (
-          <div className="p-12 text-center space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-rose-50 dark:bg-[#ff2d5f]/10 border border-rose-200 dark:border-[#ff2d5f]/20 flex items-center justify-center text-[#ff2d5f]">
-              <Layers className="w-8 h-8" />
-            </div>
-            <div className="max-w-md mx-auto">
-              <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
-                {items.length === 0 ? 'No Backlog Items Yet' : 'No Items Match Current Filters'}
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {items.length === 0
-                  ? 'Your product and sprint backlog is completely clean. Create user stories, defects, technical tasks, or research spikes.'
-                  : 'Try clearing your search query or loosening your type and priority filters.'}
-              </p>
-            </div>
-            {items.length === 0 ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingItem(null);
-                  setIsModalOpen(true);
-                }}
-                className="px-5 py-2 text-xs font-black text-white bg-[#ff2d5f] hover:bg-[#e02653] shadow-md shadow-[#ff2d5f]/20 rounded-xl transition-all cursor-pointer inline-flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4 stroke-[3]" />
-                <span>Create First Work Item</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={resetFilters}
-                className="px-4 py-1.5 text-xs font-bold text-[#ff2d5f] border border-[#ff2d5f]/30 hover:bg-[#ff2d5f]/10 rounded-xl transition-colors cursor-pointer"
-              >
-                Clear All Filters
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-50/80 dark:bg-[#020612]/80 border-b border-slate-200 dark:border-[#142552] text-slate-600 dark:text-slate-300 font-extrabold text-[11px] uppercase tracking-wider select-none">
-                  <th className="py-3 px-3 w-10 text-center">
-                    <input
-                      type="checkbox"
-                      checked={
-                        filteredItems.length > 0 &&
-                        filteredItems.every((i) => selectedItemIds.includes(i.id))
-                      }
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedItemIds(filteredItems.map((i) => i.id));
-                        } else {
-                          setSelectedItemIds([]);
-                        }
-                      }}
-                      className="rounded text-[#ff2d5f] focus:ring-[#ff2d5f] w-3.5 h-3.5"
-                    />
-                  </th>
-                  <th className="py-3 px-2 w-16 text-center">Rank</th>
-                  <th className="py-3 px-3 w-28">Priority</th>
-                  <th className="py-3 px-3 w-28">Type</th>
-                  <th className="py-3 px-4 min-w-[280px]">Work Item Summary</th>
-                  <th className="py-3 px-3 w-32">Status</th>
-                  <th className="py-3 px-3 w-20 text-center">Points</th>
-                  <th className="py-3 px-3 w-32">Assignee</th>
-                  <th className="py-3 px-3 w-28">Module / Epic</th>
-                  <th className="py-3 px-3 w-28">Target Sprint</th>
-                  <th className="py-3 px-3 w-32 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-[#142552]/40">
-                {filteredItems.map((item, index) => {
-                  const isSelected = selectedItemIds.includes(item.id);
-                  const pConfig = BACKLOG_PRIORITIES[item.priority] || BACKLOG_PRIORITIES.P2_MEDIUM;
-                  const tConfig = BACKLOG_TYPES[item.type] || BACKLOG_TYPES.feature;
-                  const sConfig = BACKLOG_STATUSES[item.status] || BACKLOG_STATUSES.backlog;
-
-                  const ownerNames = (item.ownerIds || [])
-                    .map((id) => metadata.owners.find((o) => o.id === id)?.name)
-                    .filter(Boolean);
-
-                  return (
-                    <tr
-                      key={item.id}
-                      className={cn(
-                        'hover:bg-slate-50/70 dark:hover:bg-[#08122f]/60 transition-colors group',
-                        isSelected && 'bg-rose-50/40 dark:bg-[#ff2d5f]/10'
-                      )}
-                    >
-                      {/* Checkbox */}
-                      <td className="py-2.5 px-3 text-center">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(e) => {
-                            setSelectedItemIds((prev) =>
-                              e.target.checked ? [...prev, item.id] : prev.filter((id) => id !== item.id)
-                            );
-                          }}
-                          className="rounded text-[#ff2d5f] focus:ring-[#ff2d5f] w-3.5 h-3.5"
-                        />
-                      </td>
-
-                      {/* Rank / Order controls */}
-                      <td className="py-2.5 px-2 text-center text-slate-400 font-mono text-[11px]">
-                        <div className="flex items-center justify-center gap-0.5">
-                          <button
-                            type="button"
-                            disabled={index === 0}
-                            onClick={() => handleMoveOrder(index, 'up')}
-                            className="p-0.5 hover:text-slate-900 dark:hover:text-white disabled:opacity-20 cursor-pointer"
-                            title="Move Up"
-                          >
-                            ▲
-                          </button>
-                          <span className="font-bold w-4 text-center">{index + 1}</span>
-                          <button
-                            type="button"
-                            disabled={index === filteredItems.length - 1}
-                            onClick={() => handleMoveOrder(index, 'down')}
-                            className="p-0.5 hover:text-slate-900 dark:hover:text-white disabled:opacity-20 cursor-pointer"
-                            title="Move Down"
-                          >
-                            ▼
-                          </button>
-                        </div>
-                      </td>
-
-                      {/* Priority */}
-                      <td className="py-2.5 px-3">
-                        <select
-                          value={item.priority}
-                          onChange={(e) => handleQuickPriorityChange(item.id, e.target.value as BacklogPriority)}
-                          className={cn(
-                            'text-[11px] font-black px-2 py-0.5 rounded-md border appearance-none cursor-pointer focus:outline-none transition-all',
-                            pConfig.badgeBg,
-                            pConfig.badgeText,
-                            pConfig.badgeBorder
-                          )}
-                        >
-                          {Object.values(BACKLOG_PRIORITIES).map((p) => (
-                            <option key={p.value} value={p.value}>
-                              {p.label}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-
-                      {/* Type */}
-                      <td className="py-2.5 px-3">
-                        <span
-                          className={cn(
-                            'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold border',
-                            tConfig.badgeBg,
-                            tConfig.badgeText,
-                            tConfig.badgeBorder
-                          )}
-                        >
-                          <span className={cn('w-1.5 h-1.5 rounded-full', tConfig.dotColor)} />
-                          {tConfig.label}
-                        </span>
-                      </td>
-
-                      {/* Title & Notes */}
-                      <td className="py-2.5 px-4">
-                        <div className="font-bold text-slate-900 dark:text-white line-clamp-2 leading-snug">
-                          {item.title}
-                        </div>
-                        {item.notes && (
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5 font-normal">
-                            {item.notes}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Status */}
-                      <td className="py-2.5 px-3">
-                        <select
-                          value={item.status}
-                          onChange={(e) => handleQuickStatusChange(item.id, e.target.value as BacklogStatus)}
-                          className={cn(
-                            'text-[11px] font-bold px-2 py-0.5 rounded-md border appearance-none cursor-pointer focus:outline-none transition-all',
-                            sConfig.badgeBg,
-                            sConfig.badgeText,
-                            sConfig.badgeBorder
-                          )}
-                        >
-                          {Object.values(BACKLOG_STATUSES).map((s) => (
-                            <option key={s.value} value={s.value}>
-                              {s.label}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-
-                      {/* Points */}
-                      <td className="py-2.5 px-3 text-center">
-                        {item.storyPoints !== undefined ? (
-                          <span className="font-mono font-black text-xs px-2 py-0.5 bg-slate-100 dark:bg-[#08122f] text-slate-800 dark:text-slate-200 rounded border border-slate-200 dark:border-[#142552]">
-                            {item.storyPoints}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 font-mono text-[11px]">—</span>
-                        )}
-                      </td>
-
-                      {/* Assignee */}
-                      <td className="py-2.5 px-3">
-                        {ownerNames.length > 0 || item.customOwnerText ? (
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {ownerNames.map((name) => (
-                              <span
-                                key={name}
-                                className="px-2 py-0.5 bg-slate-100 dark:bg-[#08122f] rounded text-[11px] font-semibold text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-[#142552]"
-                              >
-                                {name}
-                              </span>
-                            ))}
-                            {item.customOwnerText && (
-                              <span className="text-[11px] text-slate-500 font-medium">
-                                {item.customOwnerText}
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 italic text-[11px]">Unassigned</span>
-                        )}
-                      </td>
-
-                      {/* Module / Epic */}
-                      <td className="py-2.5 px-3">
-                        {item.moduleEpic ? (
-                          <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 rounded text-[11px] font-bold border border-blue-200 dark:border-blue-500/20">
-                            {item.moduleEpic}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 font-mono text-[11px]">—</span>
-                        )}
-                      </td>
-
-                      {/* Target Sprint */}
-                      <td className="py-2.5 px-3">
-                        {item.targetSprint ? (
-                          <span className="px-2 py-0.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 rounded text-[11px] font-bold border border-indigo-200 dark:border-indigo-500/20">
-                            {item.targetSprint}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 font-mono text-[11px]">—</span>
-                        )}
-                      </td>
-
-                      {/* Actions */}
-                      <td className="py-2.5 px-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setPushingItem(item)}
-                            className="px-2 py-1 bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/25 rounded-lg border border-amber-200 dark:border-amber-500/30 text-[11px] font-black transition-colors cursor-pointer flex items-center gap-1"
-                            title="Push into Daily Standup Task Table"
-                          >
-                            <Zap className="w-3 h-3 fill-amber-500" />
-                            <span className="hidden sm:inline">Push</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingItem(item);
-                              setIsModalOpen(true);
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-[#08122f] transition-colors cursor-pointer"
-                            title="Edit Work Item"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteItem(item)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-500/10 transition-colors cursor-pointer"
-                            title="Delete Work Item"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
     </div>
   );
 };

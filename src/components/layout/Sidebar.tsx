@@ -11,6 +11,7 @@ import {
   History,
   BookmarkCheck,
   ExternalLink,
+  Database,
 } from 'lucide-react';
 import { ActiveView } from '../../types';
 import { cn } from '../../utils/cn';
@@ -58,6 +59,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'backlog',
       label: 'Work Item Backlog',
       icon: BookmarkCheck,
+    },
+    {
+      id: 'backup_restore',
+      label: 'Backup & Restore',
+      icon: Database,
     },
     {
       id: 'audit_log',

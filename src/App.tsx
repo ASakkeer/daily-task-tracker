@@ -12,7 +12,24 @@ import { CalendarView } from './components/calendar/CalendarView';
 import { MetadataSettingsView } from './components/metadata/MetadataSettingsView';
 import { AuditLogView } from './components/audit/AuditLogView';
 import { BacklogView } from './components/backlog/BacklogView';
+import { BackupRestoreView } from './components/backup/BackupRestoreView';
+import { BacklogDueNotification } from './components/backlog/BacklogDueNotification';
 import { CommandPalette } from './components/ai/CommandPalette';
+import { getTodayDateStr } from './utils/date';
+
+const LAST_SLOT_STORAGE_KEY = 'daily_task_tracker_last_slot';
+const LAST_DATE_STORAGE_KEY = 'daily_task_tracker_last_date';
+
+function getInitialEditorContext(): { date: string; slot: ReportSlot } {
+  const savedSlot = localStorage.getItem(LAST_SLOT_STORAGE_KEY) as ReportSlot;
+  const validSlot: ReportSlot =
+    savedSlot === 'EVENING' || savedSlot === 'MORNING' || savedSlot === 'AFTERNOON' ? savedSlot : 'MORNING';
+  const savedDate = localStorage.getItem(LAST_DATE_STORAGE_KEY);
+  return {
+    date: savedDate || getTodayDateStr(),
+    slot: validSlot,
+  };
+}
 
 function getViewFromUrl(): ActiveView {
   const path = window.location.pathname.toLowerCase().replace(/^\//, '');
@@ -26,6 +43,7 @@ function getViewFromUrl(): ActiveView {
   if (target.startsWith('calendar')) return 'calendar';
   if (target.startsWith('settings') || target.startsWith('metadata')) return 'metadata';
   if (target.startsWith('backlog')) return 'backlog';
+  if (target.startsWith('backup') || target.startsWith('restore')) return 'backup_restore';
   if (target.startsWith('audit') || target.startsWith('logs')) return 'audit_log';
   if (target.startsWith('report') || target === '') return 'report_builder';
   return 'report_builder';
@@ -41,6 +59,8 @@ function getUrlForView(view: ActiveView): string {
       return '/settings';
     case 'backlog':
       return '/backlog';
+    case 'backup_restore':
+      return '/backup-restore';
     case 'audit_log':
       return '/audit';
     case 'report_builder':
@@ -56,16 +76,13 @@ export default function App() {
   const [editorContext, setEditorContext] = useState<{
     date: string;
     slot: ReportSlot;
-  } | null>(null);
+  }>(() => getInitialEditorContext());
 
   // Responsive & Modals State
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
   const handleSelectView = (view: ActiveView, replace = false) => {
-    if (view === 'report_builder') {
-      setEditorContext(null);
-    }
     setActiveView(view);
     const targetUrl = getUrlForView(view);
     if (window.location.pathname !== targetUrl) {
@@ -119,6 +136,8 @@ export default function App() {
   );
 
   const handleNavigateToReport = (date: string, slot: ReportSlot) => {
+    localStorage.setItem(LAST_DATE_STORAGE_KEY, date);
+    localStorage.setItem(LAST_SLOT_STORAGE_KEY, slot);
     setEditorContext({ date, slot });
     handleSelectView('report_builder');
   };
@@ -172,8 +191,11 @@ export default function App() {
             <ReportBuilderView
               metadata={metadata as AppMetadata}
               onMetadataUpdated={() => {}}
-              initialDate={editorContext?.date}
-              initialSlot={editorContext?.slot}
+              initialDate={editorContext.date}
+              initialSlot={editorContext.slot}
+              onContextChange={(date, slot) => {
+                setEditorContext({ date, slot });
+              }}
             />
           )}
 
@@ -207,6 +229,13 @@ export default function App() {
             />
           )}
 
+          {activeView === 'backup_restore' && (
+            <BackupRestoreView
+              metadata={metadata as AppMetadata}
+              onRefreshNeeded={() => {}}
+            />
+          )}
+
           {activeView === 'audit_log' && (
             <AuditLogView
               metadata={metadata as AppMetadata}
@@ -215,6 +244,12 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* Backlog Due Reminder across other views */}
+      <BacklogDueNotification
+        activeView={activeView}
+        onNavigateToBacklog={() => handleSelectView('backlog')}
+      />
 
       {/* Global Command Palette (⌘K) */}
       <CommandPalette
@@ -225,8 +260,9 @@ export default function App() {
           setIsCommandPaletteOpen(false);
         }}
         onSelectSlot={(slot) => {
+          localStorage.setItem(LAST_SLOT_STORAGE_KEY, slot);
           setEditorContext((prev) => ({
-            date: prev?.date || new Date().toISOString().split('T')[0],
+            date: prev?.date || getTodayDateStr(),
             slot,
           }));
           handleSelectView('report_builder');

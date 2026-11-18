@@ -7,7 +7,6 @@ import {
   Layers,
   FileText,
   Clock,
-  Database,
   Check,
   Columns3,
   Building2,
@@ -23,7 +22,6 @@ import { ColumnManager } from './ColumnManager';
 import { BrandingManager } from './BrandingManager';
 import { EodDigestManager } from './EodDigestManager';
 import { BacklogSettingsManager } from './BacklogSettingsManager';
-import { BackupRestoreManager } from './BackupRestoreManager';
 import { cn } from '../../utils/cn';
 import { DEFAULT_BRANDING, DEFAULT_COLUMNS } from '../../db/seed';
 
@@ -32,7 +30,7 @@ interface MetadataSettingsViewProps {
   onMetadataUpdated: () => void;
 }
 
-type TabKey = 'statuses' | 'owners' | 'sections' | 'snippets' | 'columns' | 'branding' | 'aging' | 'eod' | 'backlog_config' | 'backup';
+type TabKey = 'statuses' | 'owners' | 'sections' | 'snippets' | 'columns' | 'branding' | 'aging' | 'eod' | 'backlog_config';
 
 export const MetadataSettingsView: React.FC<MetadataSettingsViewProps> = ({
   metadata,
@@ -88,7 +86,6 @@ export const MetadataSettingsView: React.FC<MetadataSettingsViewProps> = ({
     { key: 'aging', label: 'ETA Aging Rules', icon: Clock },
     { key: 'eod', label: 'EOD Webhook Digest', icon: Send },
     { key: 'backlog_config', label: 'Backlog & Sprints', icon: Milestone },
-    { key: 'backup', label: 'Backup & Restore', icon: Database },
   ];
 
   return (
@@ -197,10 +194,6 @@ export const MetadataSettingsView: React.FC<MetadataSettingsViewProps> = ({
             config={localMeta.backlogConfig}
             onChange={(backlogConfig) => saveToDb({ ...localMeta, backlogConfig })}
           />
-        )}
-
-        {activeTab === 'backup' && (
-          <BackupRestoreManager onRefreshNeeded={onMetadataUpdated} />
         )}
       </div>
     </div>
