@@ -85,20 +85,24 @@ export default function App() {
   const handleSelectView = (view: ActiveView, replace = false) => {
     setActiveView(view);
     const targetUrl = getUrlForView(view);
-    if (window.location.pathname !== targetUrl) {
+    if (window.location.protocol !== 'file:' && window.location.pathname !== targetUrl) {
       if (replace) {
         window.history.replaceState({ view }, '', targetUrl);
       } else {
         window.history.pushState({ view }, '', targetUrl);
       }
+    } else if (window.location.protocol === 'file:') {
+      window.location.hash = `#/${view}`;
     }
   };
 
   useEffect(() => {
-    // Sync initial clean URL state
-    const currentTarget = getUrlForView(activeView);
-    if (window.location.pathname !== currentTarget && !window.location.hash) {
-      window.history.replaceState({ view: activeView }, '', currentTarget);
+    // Sync initial clean URL state on web platforms
+    if (window.location.protocol !== 'file:') {
+      const currentTarget = getUrlForView(activeView);
+      if (window.location.pathname !== currentTarget && !window.location.hash) {
+        window.history.replaceState({ view: activeView }, '', currentTarget);
+      }
     }
 
     const onPop = () => {
